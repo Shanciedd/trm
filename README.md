@@ -1,5 +1,7 @@
 
-# Env (Follow TRM)
+# Local device 
+
+Env (Follow TRM)
 ```bash
 git clone https://github.com/SamsungSAILMontreal/TinyRecursiveModels.git
 conda create -n trm python=3.10 -y
@@ -8,7 +10,7 @@ pip install uv
 uv pip install -r requirments.txt
 ```
 
-# ARC-AGI-1, dataset
+Dataset (ARC-AGI-1)
 ```bash 
 python -m dataset.build_arc_dataset \
   --input-file-prefix kaggle/combined/arc-agi \
@@ -17,7 +19,7 @@ python -m dataset.build_arc_dataset \
   --test-set-name evaluation
 ```
 
-# ARC-AGI-1, model 
+Model (ARC-AGI-1)
 ```bash
 mkdir ckpt
 mkdir ckpt/arc_v1_public 
@@ -36,7 +38,7 @@ mv trm.py* trm.py
 cd ../..
 ```
 
-# Run
+Run
 ```bash 
 python eval.py \
   --config-path=ckpt/arc_v1_public \
