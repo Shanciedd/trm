@@ -72,6 +72,10 @@ def create_dataloader(config: EvalConfig, split: str, **kwargs):
 
 def create_model(config: EvalConfig, eval_metadata: PuzzleDatasetMetadata):
     """Create model for evaluation"""
+    # Auto-detect device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Creating model on device: {device}")
+    
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
         batch_size=config.global_batch_size,
@@ -85,11 +89,11 @@ def create_model(config: EvalConfig, eval_metadata: PuzzleDatasetMetadata):
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    with torch.device("cuda"):
+    with torch.device(device):
         model: nn.Module = model_cls(model_cfg)
         print(model)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
-        if "DISABLE_COMPILE" not in os.environ:
+        if "DISABLE_COMPILE" not in os.environ and device == 'cuda':
             model = torch.compile(model)  # type: ignore
 
         # Load checkpoint
@@ -114,8 +118,11 @@ def load_checkpoint(model: nn.Module, config: EvalConfig):
     if config.load_checkpoint is not None:
         print(f"Loading checkpoint {config.load_checkpoint}")
 
+        # Auto-detect device
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
         # Load state dict
-        state_dict = torch.load(config.load_checkpoint, map_location="cuda", weights_only=False)
+        state_dict = torch.load(config.load_checkpoint, map_location=device, weights_only=False)
 
         # Resize and reset puzzle emb if needed
         puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"

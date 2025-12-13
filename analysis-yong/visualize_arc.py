@@ -1,8 +1,11 @@
 """
 Visualization script for ARC-AGI-1 data and TRM model predictions
+
+Supports loading SAE/TSAE models for analysis.
 """
 from typing import Optional
 import os
+import sys
 import yaml
 import torch
 import numpy as np
@@ -12,6 +15,9 @@ from matplotlib.colors import ListedColormap
 import hydra
 from omegaconf import DictConfig
 
+# Add parent directory to path to import modules
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils_sae import (
     EvalConfig, EvalState, 
     create_dataloader, init_eval_state
@@ -19,6 +25,14 @@ from utils_sae import (
 
 # Global dtype configuration
 DTYPE = torch.bfloat16
+
+# Device configuration - automatically detect CUDA availability
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Using device: {DEVICE}")
+
+# SAE/TSAE model paths (can be set via command line)
+SAE_MODEL_PATH = None
+TSAE_MODEL_PATH = None
 
 # ARC color palette (standard 10 colors used in ARC-AGI)
 ARC_COLORS = [
@@ -196,11 +210,11 @@ def run_visualization(
             print(f"{'='*60}")
             
             # Move to device
-            batch = {k: v.to(device='cuda', dtype=DTYPE if v.dtype.is_floating_point else v.dtype) 
+            batch = {k: v.to(device=DEVICE, dtype=DTYPE if v.dtype.is_floating_point else v.dtype) 
                     for k, v in batch.items()}
             
             # Initialize carry
-            with torch.device("cuda"):
+            with torch.device(DEVICE):
                 carry = eval_state.model.initial_carry(batch)
             
             # Run model inference
@@ -244,7 +258,7 @@ def run_visualization(
                         print(f"  {k}: {v}")
 
 
-@hydra.main(config_path="config", config_name="cfg_eval", version_base=None)
+@hydra.main(config_path="../config", config_name="cfg_eval", version_base=None)
 def launch(hydra_config: DictConfig):
     """Main visualization launch function"""
     # Load config
@@ -302,4 +316,3 @@ def launch(hydra_config: DictConfig):
 
 if __name__ == "__main__":
     launch()
-
