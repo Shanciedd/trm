@@ -49,3 +49,33 @@ python eval.py \
   global_batch_size=1 \
   checkpoint_path=ckpt/arc_v1_public
 ```
+
+# Visualization
+
+Visualize ARC-AGI-1 data and TRM model predictions:
+
+```bash
+python visualize_arc.py \
+  --config-path=ckpt/arc_v1_public \
+  --config-name=all_config \
+  load_checkpoint=ckpt/arc_v1_public/step_518071 \
+  data_paths="[data/arc1concept-aug-1000]" \
+  global_batch_size=1 \
+  checkpoint_path=ckpt/arc_v1_public
+```
+
+Or use the convenience script:
+```bash
+./run_visualization.sh ckpt/arc_v1_public/step_518071
+```
+
+The visualization will:
+1. Load the evaluation dataset (test split)
+2. Run the TRM model to generate predictions
+3. Visualize input grids, target grids, and predicted grids side-by-side
+4. Save visualizations to `{checkpoint_path}/results/visualizations/`
+
+Each batch will generate a PNG file showing up to 4 examples with:
+- **Input**: The puzzle input grid
+- **Target**: The ground truth solution
+- **Prediction**: The model's predicted solution
