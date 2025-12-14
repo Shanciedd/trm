@@ -23,8 +23,11 @@ from models.ema import EMAHelper
 
 import torch.distributed as dist
 
-if not dist.is_initialized():
-    dist.init_process_group(backend="gloo", rank=0, world_size=1)
+# Disable all distributed initialization on single-GPU environments
+def safe_init_dist():
+    pass  # No-op
+
+safe_init_dist()
 
 
 IGNORE_LABEL_ID = -100
