@@ -206,6 +206,9 @@ def evaluate(
 
             # To device
             batch = {k: v.to(device) for k, v in batch.items()}
+            # Patch: force puzzle identifiers to 0 to avoid embedding mismatch
+            if "puzzle_identifiers" in batch:
+                batch["puzzle_identifiers"] = torch.zeros_like(batch["puzzle_identifiers"])
             with device:
                 carry = eval_state.model.initial_carry(batch)  # type: ignore
 
