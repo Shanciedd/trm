@@ -21,6 +21,12 @@ from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMeta
 from utils.functions import load_model_class, get_model_source_path
 from models.ema import EMAHelper
 
+import torch.distributed as dist
+
+if not dist.is_initialized():
+    dist.init_process_group(backend="gloo", rank=0, world_size=1)
+
+
 IGNORE_LABEL_ID = -100
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
