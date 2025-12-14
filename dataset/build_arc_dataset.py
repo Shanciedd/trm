@@ -100,7 +100,7 @@ def aug(name: str):
     trans_id = np.random.randint(0, 8)
     mapping = np.concatenate([np.arange(0, 1, dtype=np.uint8), np.random.permutation(np.arange(1, 10, dtype=np.uint8))])  # Permute colors, Excluding "0" (black)
     
-    # name_with_aug_repr = f"{name}{PuzzleIdSeparator}t{trans_id}{PuzzleIdSeparator}{''.join(str(x) for x in mapping)}"
+    name_with_aug_repr = f"{name}{PuzzleIdSeparator}t{trans_id}{PuzzleIdSeparator}{''.join(str(x) for x in mapping)}"
 
     def _map_grid(grid: np.ndarray):
         return dihedral_transform(mapping[grid], trans_id)
@@ -123,45 +123,131 @@ def inverse_aug(name: str):
     return name.split(PuzzleIdSeparator)[0], _map_grid
 
 
-def convert_single_arc_puzzle(results: dict, name: str, puzzle: dict, aug_count: int, dest_mapping: Dict[str, Tuple[str, str]]):
-    # Convert
-    dests = set(dest_mapping.values())
-    converted = {dest: ARCPuzzle(name, []) for dest in dests}
-    for example_type, examples in puzzle.items():
-        # Map to target split
-        dest = dest_mapping[example_type]
-        converted[dest].examples.extend([(arc_grid_to_np(example["input"]), arc_grid_to_np(example["output"])) for example in examples])
+# def convert_single_arc_puzzle(results: dict, name: str, puzzle: dict, aug_count: int, dest_mapping: Dict[str, Tuple[str, str]]):
+#     # Convert
+#     dests = set(dest_mapping.values())
+#     converted = {dest: ARCPuzzle(name, []) for dest in dests}
+#     for example_type, examples in puzzle.items():
+#         # Map to target split
+#         dest = dest_mapping[example_type]
+#         converted[dest].examples.extend([(arc_grid_to_np(example["input"]), arc_grid_to_np(example["output"])) for example in examples])
 
-    group = [converted]
+#     group = [converted]
     
-    # Augment
-    if aug_count > 0:
-        hashes = {puzzle_hash(converted)}
+#     # Augment
+#     if aug_count > 0:
+#         hashes = {puzzle_hash(converted)}
 
+#         for _trial in range(ARCAugmentRetriesFactor * aug_count):
+#             aug_name, _map_grid = aug(name)
+
+#             # Check duplicate
+#             augmented = {dest: ARCPuzzle(aug_name, [(_map_grid(input), _map_grid(label)) for (input, label) in puzzle.examples]) for dest, puzzle in converted.items()}
+#             h = puzzle_hash(augmented)
+#             if h not in hashes:
+#                 hashes.add(h)
+#                 group.append(augmented)
+                
+#             if len(group) >= aug_count + 1:
+#                 break
+            
+#         if len(group) < aug_count + 1:
+#             print (f"[Puzzle {name}] augmentation not full, only {len(group)}")
+
+#     # Append
+#     for dest in dests:
+#         # Convert the examples
+#         dest_split, dest_set = dest
+
+#         results.setdefault(dest_split, {})
+#         results[dest_split].setdefault(dest_set, [])
+#         results[dest_split][dest_set].append([converted[dest] for converted in group])
+
+def convert_single_arc_puzzle(
+    results: dict,
+    name: str,
+    puzzle: dict,
+    aug_count: int,
+    dest_mapping: Dict[str, Tuple[str, str]]
+):
+    """
+    Modified version:
+    - Keeps ALL augmentations under the SAME puzzle ID.
+    - Does NOT create new puzzles.
+    - Prevents puzzle embedding dimension explosion.
+    """
+
+    # 1. Prepare destination splits
+    dests = set(dest_mapping.values())
+
+    # 2. Create the base puzzle objects (one per dest)
+    converted = {dest: ARCPuzzle(name, []) for dest in dests}
+
+    # 3. Load raw examples into converted
+    for example_type, examples in puzzle.items():
+        dest = dest_mapping[example_type]
+        for example in examples:
+            inp = arc_grid_to_np(example["input"])
+            out = arc_grid_to_np(example["output"])
+            converted[dest].examples.append((inp, out))
+
+    # ------------------------------
+    # 4. AUGMENTATION (modified)
+    # ------------------------------
+    # Instead of creating NEW puzzles, we append augmented examples
+    # into the SAME puzzle.
+    if aug_count > 0:
+        hashes = set()
+        # Compute hash of original puzzle
+        hashes.add(puzzle_hash({d: converted[d] for d in converted}))
+
+        # Perform augmentation trials
         for _trial in range(ARCAugmentRetriesFactor * aug_count):
             aug_name, _map_grid = aug(name)
 
-            # Check duplicate
-            augmented = {dest: ARCPuzzle(aug_name, [(_map_grid(input), _map_grid(label)) for (input, label) in puzzle.examples]) for dest, puzzle in converted.items()}
-            h = puzzle_hash(augmented)
-            if h not in hashes:
-                hashes.add(h)
-                group.append(augmented)
-                
-            if len(group) >= aug_count + 1:
-                break
-            
-        if len(group) < aug_count + 1:
-            print (f"[Puzzle {name}] augmentation not full, only {len(group)}")
+            augmented_examples_by_dest = {}
 
-    # Append
+            # Build augmented examples for each dest
+            for dest in dests:
+                base_examples = converted[dest].examples
+                augmented_examples = []
+                for inp, out in base_examples:
+                    augmented_examples.append((_map_grid(inp), _map_grid(out)))
+                augmented_examples_by_dest[dest] = augmented_examples
+
+            # Compute hash to avoid duplicates
+            h = hashlib.sha256()
+            for dest in sorted(dests):
+                for inp, out in augmented_examples_by_dest[dest]:
+                    h.update(inp.tobytes())
+                    h.update(out.tobytes())
+            h_val = h.hexdigest()
+
+            if h_val not in hashes:
+                hashes.add(h_val)
+
+                # Append augmented examples INTO THE SAME puzzle
+                for dest in dests:
+                    converted[dest].examples.extend(augmented_examples_by_dest[dest])
+
+            # Stop when enough unique augmentations generated
+            if len(hashes) >= aug_count + 1:
+                break
+
+        if len(hashes) < aug_count + 1:
+            print(f"[Puzzle {name}] augmentation not full, only {len(hashes)} unique versions")
+
+    # ------------------------------
+    # 5. Append to results (no new puzzles created!)
+    # ------------------------------
     for dest in dests:
-        # Convert the examples
         dest_split, dest_set = dest
 
         results.setdefault(dest_split, {})
         results[dest_split].setdefault(dest_set, [])
-        results[dest_split][dest_set].append([converted[dest] for converted in group])
+
+        # Only ONE puzzle object even with many examples
+        results[dest_split][dest_set].append([converted[dest]])
 
 
 def load_puzzles_arcagi(config: DataProcessConfig):
