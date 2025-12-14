@@ -100,12 +100,12 @@ def aug(name: str):
     trans_id = np.random.randint(0, 8)
     mapping = np.concatenate([np.arange(0, 1, dtype=np.uint8), np.random.permutation(np.arange(1, 10, dtype=np.uint8))])  # Permute colors, Excluding "0" (black)
     
-    name_with_aug_repr = f"{name}{PuzzleIdSeparator}t{trans_id}{PuzzleIdSeparator}{''.join(str(x) for x in mapping)}"
+    # name_with_aug_repr = f"{name}{PuzzleIdSeparator}t{trans_id}{PuzzleIdSeparator}{''.join(str(x) for x in mapping)}"
 
     def _map_grid(grid: np.ndarray):
         return dihedral_transform(mapping[grid], trans_id)
     
-    return name_with_aug_repr, _map_grid
+    return name, _map_grid
 
 
 def inverse_aug(name: str):
