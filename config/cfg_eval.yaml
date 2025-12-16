@@ -24,3 +24,5 @@ seed: 0
 # Number of training epochs for SAE (if doing SAE training)
 num_epochs: 10
 
+max_batches: null  # Set to null to use all batches
+
