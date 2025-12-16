@@ -258,6 +258,8 @@ def evaluate(
                 'batch_info': {k: v.cpu() for k, v in batch.items()}
             }
             
+            print("Pred keys:", preds.keys())
+            
             # # Save predictions and relevant batch data
             # for collection_name, collection in [('preds', preds), ('batch', batch)]:
             #     for k, v in collection.items():
