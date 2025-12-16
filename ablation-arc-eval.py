@@ -53,21 +53,38 @@ def load_checkpoint(model: nn.Module, config: EvalConfig):
     if config.load_checkpoint is None:
         raise ValueError("load_checkpoint is None")
 
-    state_dict = torch.load(config.load_checkpoint, map_location=device, weights_only=False)
+    print(f"[INFO] Loading checkpoint: {config.load_checkpoint}")
+    raw_state = torch.load(config.load_checkpoint, map_location=device, weights_only=False)
 
-    puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
-    expected_shape = model.model.puzzle_emb.weights.shape  # type: ignore
+    state_dict = {}
 
+    for k, v in raw_state.items():
+        if k.startswith("_orig_mod."):
+            k = k[len("_orig_mod."):]
+        state_dict[k] = v
+
+    puzzle_emb_name = "model.inner.puzzle_emb.weights"
     if puzzle_emb_name in state_dict:
         pe = state_dict[puzzle_emb_name]
+        expected_shape = model.model.puzzle_emb.weights.shape  # type: ignore
         if pe.shape != expected_shape:
+            print(
+                f"[WARN] Resetting puzzle embedding "
+                f"{pe.shape} -> {expected_shape}"
+            )
             state_dict[puzzle_emb_name] = (
                 torch.mean(pe, dim=0, keepdim=True)
                 .expand(expected_shape)
                 .contiguous()
             )
 
-    model.load_state_dict(state_dict, assign=True)
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+
+    print("[INFO] Checkpoint loaded")
+    if missing:
+        print("[WARN] Missing keys:", missing)
+    if unexpected:
+        print("[WARN] Unexpected keys:", unexpected)
 
 
 def create_model(
