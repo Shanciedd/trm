@@ -259,6 +259,9 @@ def evaluate(
             # Clean up to prevent memory accumulation
             del carry, loss, preds, metrics, batch, all_finish
 
+            print("complete the first batch")
+            break
+
         # Process metrics
         if metric_values is not None:
             reduced_metrics = metric_values.cpu().numpy()
