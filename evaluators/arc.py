@@ -10,6 +10,9 @@ import torch.distributed as dist
 from dataset.build_arc_dataset import inverse_aug, grid_hash, arc_grid_to_np
 from dataset.common import PuzzleDatasetMetadata
 
+
+
+
 @njit
 def _crop(grid: np.ndarray):
     """Find maximum-sized rectangle without any EOS token inside. """
@@ -105,9 +108,13 @@ class ARC:
             self._local_preds[orig_name][input_hash].append((pred_hash, float(q)))
     
     def result(self, save_path: Optional[str], rank: int, world_size: int, group: Optional[torch.distributed.ProcessGroup] = None) -> Optional[Dict[str, float]]:
-        # Gather predictions to rank 0 for voting
-        global_hmap_preds = [None for _ in range(world_size)] if rank == 0 else None
-        dist.gather_object((self._local_hmap, self._local_preds), global_hmap_preds, dst=0, group=group)
+        # If no distributed group, run locally (single GPU)
+        if group is None:
+          global_hmap_preds = [(self._local_hmap, self._local_preds)]
+        else:
+          # Gather predictions to rank 0 for voting
+          global_hmap_preds = [None for _ in range(world_size)] if rank == 0 else None
+          dist.gather_object((self._local_hmap, self._local_preds), global_hmap_preds, dst=0, group=group)
         
         # Rank 0 logic
         if rank != 0:
