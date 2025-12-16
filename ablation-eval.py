@@ -60,6 +60,9 @@ class EvalConfig(pydantic.BaseModel):
     # Extras
     seed: int = 0
     eval_save_outputs: List[str] = []
+    
+    # Limit number of eval batches (for debugging)
+    max_batches: Optional[int] = None
 
 @dataclass
 class EvalState:
@@ -171,7 +174,7 @@ def evaluate(
     evaluators: List[Any],
 ):
     """Run evaluation on the model"""
-    MAX_BATCHES = 20
+    MAX_BATCHES = config.max_batches if config.max_batches is not None else 2
     RESULT_DIR = config.checkpoint_path.replace("ckpt/", "results/")
     os.makedirs(RESULT_DIR, exist_ok=True)
     reduced_metrics = None
@@ -290,8 +293,29 @@ def evaluate(
             # exit(0) # TODO: remove
 
             # Update evaluators
+            # for evaluator in evaluators:
+            #     evaluator.update_batch(batch, preds)
             for evaluator in evaluators:
-                evaluator.update_batch(batch, preds)
+                if evaluator.__class__.__name__ == "ARC":
+                    # Filter to only test puzzles
+                    test_ids = evaluator.test_puzzles.keys()
+                    id_map = evaluator.identifier_map
+                    
+                    keep = []
+                    for i, pid in enumerate(batch["puzzle_identifiers"].cpu().tolist()):
+                        if pid == evaluator.blank_identifier_id:
+                            continue
+                        if id_map[pid] in test_ids:
+                            keep.append(i)
+
+                    if len(keep) == 0:
+                        continue
+
+                    filtered_batch = {k: v[keep] for k, v in batch.items()}
+                    filtered_preds = {k: v[keep] for k, v in preds.items()}
+                    evaluator.update_batch(filtered_batch, filtered_preds)
+                else:
+                    evaluator.update_batch(batch, preds)
             del carry, loss, preds, batch, all_finish
 
             # Aggregate metrics
