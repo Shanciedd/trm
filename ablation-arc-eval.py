@@ -60,12 +60,10 @@ def load_checkpoint(model: nn.Module, config: EvalConfig):
     model.load_state_dict(state_dict, assign=True)
 
 
-def create_model(config: EvalConfig, vocab_size: int, seq_len: int, num_puzzle_identifiers: int):
+def create_model(config: EvalConfig, num_puzzle_identifiers: int):
     model_cfg = dict(
-        **config.arch.__pydantic_extra__,  # type: ignore
+        **config.arch.__pydantic_extra__,
         batch_size=config.global_batch_size,
-        vocab_size=vocab_size,
-        seq_len=seq_len,
         num_puzzle_identifiers=num_puzzle_identifiers,
         causal=False,
     )
@@ -174,11 +172,12 @@ def launch(hydra_config: DictConfig):
     test_puzzles, names = load_arc_test_data(config.data_paths[0])
     test_puzzles, names = truncate_arc_puzzles(test_puzzles, names, config.max_puzzles)
 
-    vocab_size = config.arch.__pydantic_extra__["vocab_size"]  # type: ignore
-    seq_len = config.arch.__pydantic_extra__["seq_len"]        # type: ignore
-
-    eval_metadata = build_arc_eval_metadata(test_puzzles, vocab_size, seq_len)
-    eval_state = init_eval_state(config, vocab_size, seq_len, eval_metadata.num_puzzle_identifiers)
+    eval_metadata = build_arc_eval_metadata(
+        test_puzzles=test_puzzles,
+        vocab_size=config.arch.__pydantic_extra__["vocab_size"],
+        seq_len=config.arch.__pydantic_extra__["seq_len"],
+    )
+    eval_state = init_eval_state(config=config, num_puzzle_identifiers=eval_metadata.num_puzzle_identifiers,)
     eval_state.model.eval()
 
     evaluator = ARC(
