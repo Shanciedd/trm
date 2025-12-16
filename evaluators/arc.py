@@ -96,6 +96,7 @@ class ARC:
             input_hash = grid_hash(_inverse_fn(_crop(input)))
             
             pred = _inverse_fn(_crop(pred))
+            print("UPDATE:", orig_name, input_hash)
             assert np.all((pred >= 0) & (pred <= 9)), f"Puzzle {name}'s prediction out of 0-9 range."  # Sanity check
 
             # Store into local state
