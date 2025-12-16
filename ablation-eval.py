@@ -21,17 +21,6 @@ from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMeta
 from utils.functions import load_model_class, get_model_source_path
 from models.ema import EMAHelper
 
-import torch.distributed as dist
-
-# Disable all distributed initialization on single-GPU environments
-def safe_init_dist():
-    pass  # No-op
-
-safe_init_dist()
-
-
-IGNORE_LABEL_ID = -100
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class LossConfig(pydantic.BaseModel):
@@ -181,13 +170,12 @@ def evaluate(
     eval_metadata: PuzzleDatasetMetadata,
     evaluators: List[Any],
 ):
-    # ----------------------------------------
-    # ADD THIS: store per-puzzle evaluation info
-    # ----------------------------------------
-    puzzle_stats = []
-    max_batches = 50
-
     """Run evaluation on the model"""
+    RESULT_ROOT = "/content/drive/MyDrive/Colab Notebooks/ESE5460/TRM_SAE/results"
+    result_dir = os.path.join(RESULT_ROOT, config.run_name)
+    os.makedirs(result_dir, exist_ok=True)
+    MAX_BATCHES = 20
+
     reduced_metrics = None
 
     with torch.inference_mode():
@@ -209,15 +197,16 @@ def evaluate(
         for set_name, batch, global_batch_size in eval_loader:
             processed_batches += 1
             print(f"Processing batch {processed_batches}: {set_name}")
-            if processed_batches > max_batches:
-                print(f"Reached max_batches={max_batches}, stopping evaluation early.")
+            
+            # ===========================
+            # LIMIT TO FIRST 20 BATCHES
+            # ===========================
+            if processed_batches > MAX_BATCHES:
+                print(f"Reached max_batches={MAX_BATCHES}, stopping evaluation early.")
                 break
-
+            
             # To device
             batch = {k: v.to(device) for k, v in batch.items()}
-            # Patch: force puzzle identifiers to 0 to avoid embedding mismatch
-            if "puzzle_identifiers" in batch:
-                batch["puzzle_identifiers"] = torch.zeros_like(batch["puzzle_identifiers"])
             with device:
                 carry = eval_state.model.initial_carry(batch)  # type: ignore
 
@@ -250,83 +239,59 @@ def evaluate(
 
             pbar.close()
             print(f"  Completed inference in {inference_steps} steps")
-
-            # ----------------------------------------
-            # ADD: Process per-puzzle stats
-            # ----------------------------------------
-            puzzle_ids = batch["puzzle_identifiers"].cpu().tolist()
-            labels = batch["labels"].cpu()
-            predictions = preds["preds"].cpu()
-
-            for i, pid in enumerate(puzzle_ids):
-                label_seq = labels[i]
-                pred_seq = predictions[i]
-
-                valid_mask = (label_seq != IGNORE_LABEL_ID)
-
-                # Compare only valid positions
-                exact_match = torch.equal(pred_seq[valid_mask], label_seq[valid_mask])
-
-                puzzle_stats.append({
-                    "puzzle_id": int(pid),
-                    "correct": bool(exact_match),
-                    "pred_seq": pred_seq.tolist(),
-                    "label_seq": label_seq.tolist(),
-                    "pred_valid": pred_seq[valid_mask].tolist(),
-                    "label_valid": label_seq[valid_mask].tolist(),
-                })
-            # ----------------------------------------
-            # ADD END
-            # ----------------------------------------
-
-
-            # Save predictions, loss, trajectories, and metrics for this batch immediately
-            if config.checkpoint_path is not None:
-                stacked_trajectories_L = torch.stack(batch_trajectories_L, dim=0)
-                stacked_trajectories_H = torch.stack(batch_trajectories_H, dim=0)
-                batch_data = {
-                    'loss': loss.cpu(),
-                    'trajectories_L': stacked_trajectories_L.cpu(),
-                    'trajectories_H': stacked_trajectories_H.cpu(),
-                    'metrics': {k: v.cpu() for k, v in metrics.items()},
-                    'predictions': {},
-                    'batch_info': {}
-                }
-                
-                # Save predictions and relevant batch data
-                for collection_name, collection in [('preds', preds), ('batch', batch)]:
-                    for k, v in collection.items():
-                        if k in config.eval_save_outputs:
-                            if collection_name == 'preds':
-                                batch_data['predictions'][k] = v.cpu()
-                            else:
-                                batch_data['batch_info'][k] = v.cpu()
-                
-                os.makedirs(config.checkpoint_path.replace('ckpt/', 'results/'), exist_ok=True)
-                batch_path = os.path.join(
-                    config.checkpoint_path.replace('ckpt/', 'results/'),
-                    f"batch_data_{processed_batches:04d}.pt"
-                )
-                torch.save(batch_data, batch_path)
-                print(f"  Saved batch data to {batch_path}")
-                print(f"    Loss: {loss.item():.4f}")
-                print(f"    Metrics: {metrics}")
-                print(f"    Predictions: {batch_data['predictions']}")
-                print(f"    Batch info: {batch_data['batch_info']}")
-                print(f"    Trajectories_L: {stacked_trajectories_L.shape}")
-                print(f"    Trajectories_H: {stacked_trajectories_H.shape}")
-                del batch_data, stacked_trajectories_L, stacked_trajectories_H
-                # exit(0) # TODO: remove
             
+            # Save predictions for this batch
             for k, v in preds.items():
-                if k in config.eval_save_outputs:
-                    save_preds.setdefault(k, []).append(v.cpu())
+                if k not in save_preds:
+                    save_preds[k] = []
+                save_preds[k].append(v.cpu())
+            
+            # Save predictions, loss, trajectories, and metrics for this batch immediately
+            # if config.checkpoint_path is not None:
+            stacked_trajectories_L = torch.stack(batch_trajectories_L, dim=0)
+            stacked_trajectories_H = torch.stack(batch_trajectories_H, dim=0)
+            batch_data = {
+                'batch_index': processed_batches,
+                'loss': loss.cpu(),
+                'trajectories_L': stacked_trajectories_L.cpu(),
+                'trajectories_H': stacked_trajectories_H.cpu(),
+                'metrics': {k: v.cpu() for k, v in metrics.items()},
+                'predictions': {k: v.cpu() for k, v in preds.items()},
+                'batch_info': {k: v.cpu() for k, v in batch.items()}
+            }
+            
+            # # Save predictions and relevant batch data
+            # for collection_name, collection in [('preds', preds), ('batch', batch)]:
+            #     for k, v in collection.items():
+            #         if k in config.eval_save_outputs:
+            #             if collection_name == 'preds':
+            #                 batch_data['predictions'][k] = v.cpu()
+            #             else:
+            #                 batch_data['batch_info'][k] = v.cpu()
+            
+            # os.makedirs(config.checkpoint_path.replace('ckpt/', 'results/'), exist_ok=True)
+            # batch_path = os.path.join(
+            #     config.checkpoint_path.replace('ckpt/', 'results/'),
+            #     f"batch_data_{processed_batches:04d}.pt"
+            # )
+            batch_path = os.path.join(result_dir, f"batch_data_{processed_batches:04d}.pt")
+            torch.save(batch_data, batch_path)
+            
+            print(f"  Saved batch data to {batch_path}")
+            print(f"    Loss: {loss.item():.4f}")
+            print(f"    Metrics: {metrics}")
+            print(f"    Predictions: {batch_data['predictions']}")
+            print(f"    Batch info: {batch_data['batch_info']}")
+            print(f"    Trajectories_L: {stacked_trajectories_L.shape}")
+            print(f"    Trajectories_H: {stacked_trajectories_H.shape}")
+            del batch_data, stacked_trajectories_L, stacked_trajectories_H
+            # exit(0) # TODO: remove
 
             # Update evaluators
             for evaluator in evaluators:
                 evaluator.update_batch(batch, preds)
-                
-            del carry, loss, preds, batch, all_finish
+            # del carry, loss, preds, batch, all_finish
+            del carry, loss, batch, all_finish
 
             # Aggregate metrics
             set_id = set_ids[set_name]
@@ -345,14 +310,23 @@ def evaluate(
         # Concatenate saved predictions
         save_preds = {k: torch.cat(v, dim=0) for k, v in save_preds.items()}
 
-        # Save predictions
-        if config.checkpoint_path is not None:
-            os.makedirs(config.checkpoint_path, exist_ok=True)
+        # # Save predictions
+        # if config.checkpoint_path is not None:
+        #     os.makedirs(config.checkpoint_path, exist_ok=True)
             
-            if len(save_preds):
-                torch.save(
-                    save_preds, os.path.join(config.checkpoint_path, f"all_preds.pt")
-                )
+        #     if len(save_preds):
+        #         torch.save(
+        #             save_preds, os.path.join(config.checkpoint_path, f"all_preds.pt")
+        #         )
+        # del save_preds
+        
+        # Save predictions to Drive result directory
+        if len(save_preds):
+            os.makedirs(result_dir, exist_ok=True)
+            torch.save(
+                save_preds,
+                os.path.join(result_dir, "all_preds.pt")
+            )
         del save_preds
 
         # Process metrics
@@ -391,12 +365,16 @@ def evaluate(
                 
             # Path for saving
             evaluator_save_path = None
-            if config.checkpoint_path is not None:
-                evaluator_save_path = os.path.join(
-                    config.checkpoint_path,
-                    f"evaluator_{evaluator.__class__.__name__}",
-                )
-                os.makedirs(evaluator_save_path, exist_ok=True)
+            # if config.checkpoint_path is not None:
+            #     evaluator_save_path = os.path.join(
+            #         config.checkpoint_path,
+            #         f"evaluator_{evaluator.__class__.__name__}",
+            #     )
+            evaluator_save_path = os.path.join(
+                result_dir,
+                f"evaluator_{evaluator.__class__.__name__}",
+            )
+            os.makedirs(evaluator_save_path, exist_ok=True)
 
             # Run and log
             metrics = evaluator.result(evaluator_save_path, rank=0, world_size=1, group=None)
@@ -408,15 +386,6 @@ def evaluate(
                 print(f"  Completed {evaluator.__class__.__name__}")
                 
         print("All evaluators completed!")
-
-    # --------------------------------------------------------
-    # NEW: Save puzzle_stats *without breaking original logic*
-    # --------------------------------------------------------
-    if config.checkpoint_path is not None:
-        result_dir = config.checkpoint_path.replace("ckpt/", "results/")
-        os.makedirs(result_dir, exist_ok=True)
-        torch.save(puzzle_stats, os.path.join(result_dir, "puzzle_stats.pt"))
-        print(f"\nSaved puzzle-level correctness to {result_dir}/puzzle_stats.pt")
 
     return reduced_metrics
 
