@@ -171,11 +171,9 @@ def evaluate(
     evaluators: List[Any],
 ):
     """Run evaluation on the model"""
-    RESULT_ROOT = "/content/drive/MyDrive/Colab Notebooks/ESE5460/TRM_SAE/results"
-    result_dir = os.path.join(RESULT_ROOT, config.run_name)
-    os.makedirs(result_dir, exist_ok=True)
     MAX_BATCHES = 20
-
+    RESULT_DIR = config.checkpoint_path.replace("ckpt/", "results/")
+    os.makedirs(RESULT_DIR, exist_ok=True)
     reduced_metrics = None
 
     with torch.inference_mode():
@@ -274,7 +272,9 @@ def evaluate(
             #     config.checkpoint_path.replace('ckpt/', 'results/'),
             #     f"batch_data_{processed_batches:04d}.pt"
             # )
-            batch_path = os.path.join(result_dir, f"batch_data_{processed_batches:04d}.pt")
+            
+            # Save batch data to RESULT_DIR (not ckpt/)
+            batch_path = os.path.join(RESULT_DIR, f"batch_data_{processed_batches:04d}.pt")
             torch.save(batch_data, batch_path)
             
             print(f"  Saved batch data to {batch_path}")
@@ -290,8 +290,7 @@ def evaluate(
             # Update evaluators
             for evaluator in evaluators:
                 evaluator.update_batch(batch, preds)
-            # del carry, loss, preds, batch, all_finish
-            del carry, loss, batch, all_finish
+            del carry, loss, preds, batch, all_finish
 
             # Aggregate metrics
             set_id = set_ids[set_name]
@@ -320,13 +319,9 @@ def evaluate(
         #         )
         # del save_preds
         
-        # Save predictions to Drive result directory
+        # Save concatenated preds into RESULT_DIR
         if len(save_preds):
-            os.makedirs(result_dir, exist_ok=True)
-            torch.save(
-                save_preds,
-                os.path.join(result_dir, "all_preds.pt")
-            )
+            torch.save(save_preds, os.path.join(RESULT_DIR, "all_preds.pt"))
         del save_preds
 
         # Process metrics
@@ -363,15 +358,18 @@ def evaluate(
         for i, evaluator in enumerate(evaluators):
             print(f"Running evaluator {i+1}/{len(evaluators)}: {evaluator.__class__.__name__}")
                 
-            # Path for saving
-            evaluator_save_path = None
+            # # Path for saving
+            # evaluator_save_path = None
             # if config.checkpoint_path is not None:
             #     evaluator_save_path = os.path.join(
             #         config.checkpoint_path,
             #         f"evaluator_{evaluator.__class__.__name__}",
             #     )
+            # os.makedirs(evaluator_save_path, exist_ok=True)
+            
+            # Evaluator output directory under RESULTS (not ckpt/)
             evaluator_save_path = os.path.join(
-                result_dir,
+                RESULT_DIR,
                 f"evaluator_{evaluator.__class__.__name__}",
             )
             os.makedirs(evaluator_save_path, exist_ok=True)
