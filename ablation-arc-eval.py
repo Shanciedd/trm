@@ -60,26 +60,40 @@ def load_checkpoint(model: nn.Module, config: EvalConfig):
     model.load_state_dict(state_dict, assign=True)
 
 
-def create_model(config: EvalConfig, num_puzzle_identifiers: int):
+def create_model(
+    config: EvalConfig,
+    num_puzzle_identifiers: int,
+):
     model_cfg = dict(
-        **config.arch.__pydantic_extra__,
+        **config.arch.__pydantic_extra__,   # vocab_size / seq_len
         batch_size=config.global_batch_size,
         num_puzzle_identifiers=num_puzzle_identifiers,
         causal=False,
     )
+
     model_cls = load_model_class(config.arch.name)
-    loss_cls = load_model_class(config.arch.loss.name)
-    model = model_cls(model_cfg)
-    model = loss_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
+    loss_head_cls = load_model_class(config.arch.loss.name)
+
+    model: nn.Module = model_cls(model_cfg)
+    model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
+
     if "DISABLE_COMPILE" not in os.environ:
         model = torch.compile(model)  # type: ignore
+
     load_checkpoint(model, config)
     return model
 
 
-def init_eval_state(config: EvalConfig, vocab_size: int, seq_len: int, num_puzzle_identifiers: int):
-    model = create_model(config, vocab_size, seq_len, num_puzzle_identifiers)
+def init_eval_state(
+    config: EvalConfig,
+    num_puzzle_identifiers: int,
+):
+    model = create_model(
+        config=config,
+        num_puzzle_identifiers=num_puzzle_identifiers,
+    )
     return EvalState(model=model, carry=None)
+
 
 
 def save_code_and_config(config: EvalConfig):
