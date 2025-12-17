@@ -244,6 +244,8 @@ def evaluate(
             
             # Clean up to prevent memory accumulation
             del carry, loss, preds, metrics, batch, all_finish
+            exit(0)
+            
 
         # Process metrics
         if metric_values is not None:
