@@ -262,7 +262,7 @@ def evaluate(
                 'batch_info': {k: v.cpu() for k, v in batch.items()}
             }
             
-            print("Pred keys:", preds.keys())
+            # print("Pred keys:", preds.keys())
             
             # # Save predictions and relevant batch data
             # for collection_name, collection in [('preds', preds), ('batch', batch)]:
@@ -294,28 +294,7 @@ def evaluate(
             # exit(0) # TODO: remove
 
             # Update evaluators
-            # for evaluator in evaluators:
-            #     evaluator.update_batch(batch, preds)
             for evaluator in evaluators:
-                if evaluator.__class__.__name__ == "ARC":
-                    # Filter to only test puzzles
-                    test_ids = evaluator.test_puzzles.keys()
-                    id_map = evaluator.identifier_map
-                    
-                    keep = []
-                    for i, pid in enumerate(batch["puzzle_identifiers"].cpu().tolist()):
-                        if pid == evaluator.blank_identifier_id:
-                            continue
-                        if id_map[pid] in test_ids:
-                            keep.append(i)
-
-                    if len(keep) == 0:
-                        continue
-
-                    filtered_batch = {k: v[keep] for k, v in batch.items()}
-                    filtered_preds = {k: v[keep] for k, v in preds.items()}
-                    evaluator.update_batch(filtered_batch, filtered_preds)
-                else:
                     evaluator.update_batch(batch, preds)
             del carry, loss, preds, batch, all_finish
 
