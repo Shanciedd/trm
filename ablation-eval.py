@@ -178,6 +178,248 @@ def ablate_z_L_with_sae(z_L, sae, ablate_ids):
     z_L_hat = out["x_tgt"]           # [B,1,L,D]
     return z_L_hat.squeeze(1)        # [B,L,D]
 
+# def evaluate(
+#     config: EvalConfig,
+#     eval_state: EvalState,
+#     eval_loader: torch.utils.data.DataLoader,
+#     eval_metadata: PuzzleDatasetMetadata,
+#     evaluators: List[Any],
+# ):
+#     """Run evaluation on the model"""
+#     MAX_BATCHES = config.max_batches if config.max_batches is not None else 2
+#     RESULT_DIR = config.checkpoint_path.replace("ckpt/", "results/")
+#     os.makedirs(RESULT_DIR, exist_ok=True)
+#     reduced_metrics = None
+    
+#     sae = None
+#     if config.use_sae_ablation:
+#         from sae import SAE
+#         sae = SAE(
+#             d_model=512, depth=16, n_heads=8, n_features=4096,
+#             topk=64, lambda_sparse=1e-3, n_registers=4,
+#             auxk_topk=512, aux_alpha=1.0/32.0,
+#             dead_token_threshold=200_000,
+#         ).to(device, dtype=torch.bfloat16)
+
+#         ckpt = torch.load("weights/sae/best_val.pt", map_location=device)
+#         sae.load_state_dict(ckpt["sae_state_dict"])
+#         sae.eval()
+
+
+#     with torch.inference_mode():
+#         return_keys = set(config.eval_save_outputs)
+#         return_keys.add("preds")  # Always gather predictions for per-example correctness
+#         for evaluator in evaluators:
+#             evaluator.begin_eval()
+#             return_keys.update(evaluator.required_outputs)
+
+#         # Run evaluation
+#         set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
+
+#         save_preds = {}
+#         metric_keys = []
+#         metric_values = None
+
+#         carry = None
+#         processed_batches = 0
+        
+#         for set_name, batch, global_batch_size in eval_loader:
+#             processed_batches += 1
+#             print(f"Processing batch {processed_batches}: {set_name}")
+            
+#             # ===========================
+#             # LIMIT TO FIRST 20 BATCHES
+#             # ===========================
+#             if processed_batches > MAX_BATCHES:
+#                 print(f"Reached max_batches={MAX_BATCHES}, stopping evaluation early.")
+#                 break
+            
+#             # To device
+#             batch = {k: v.to(device) for k, v in batch.items()}
+#             with device:
+#                 carry = eval_state.model.initial_carry(batch)  # type: ignore
+
+#             # Store trajectories for this batch
+#             batch_trajectories_L = []
+#             batch_trajectories_H = []
+            
+#             # Forward
+#             inference_steps = 0
+#             pbar = tqdm.tqdm(desc=f"Inference steps for batch {processed_batches}")
+#             while True:
+#                 # Save z_L at each inference step (BEFORE forward pass)
+#                 # This captures the reasoning trajectory at each step
+#                 assert hasattr(carry, 'inner_carry') and (hasattr(carry.inner_carry, 'z_L') and hasattr(carry.inner_carry, 'z_H'))
+#                 batch_trajectories_L.append(carry.inner_carry.z_L.cpu())
+#                 batch_trajectories_H.append(carry.inner_carry.z_H.cpu())
+                
+#                 carry, loss, metrics, preds, all_finish = eval_state.model(
+#                     carry=carry, batch=batch, return_keys=return_keys
+#                 )
+#                 inference_steps += 1
+#                 pbar.update(1)
+
+#                 if all_finish:
+#                     # Save final z_L after last step
+#                     assert hasattr(carry, 'inner_carry') and (hasattr(carry.inner_carry, 'z_L') and hasattr(carry.inner_carry, 'z_H'))
+#                     batch_trajectories_L.append(carry.inner_carry.z_L.cpu())
+#                     batch_trajectories_H.append(carry.inner_carry.z_H.cpu())
+#                     break
+
+#             pbar.close()
+#             print(f"  Completed inference in {inference_steps} steps")
+            
+#             # Save predictions for this batch
+#             for k, v in preds.items():
+#                 if k not in save_preds:
+#                     save_preds[k] = []
+#                 save_preds[k].append(v.cpu())
+            
+#             # Save predictions, loss, trajectories, and metrics for this batch immediately
+#             # if config.checkpoint_path is not None:
+#             stacked_trajectories_L = torch.stack(batch_trajectories_L, dim=0)
+#             stacked_trajectories_H = torch.stack(batch_trajectories_H, dim=0)
+#             batch_data = {
+#                 'batch_index': processed_batches,
+#                 'loss': loss.cpu(),
+#                 'trajectories_L': stacked_trajectories_L.cpu(),
+#                 'trajectories_H': stacked_trajectories_H.cpu(),
+#                 'metrics': {k: v.cpu() for k, v in metrics.items()},
+#                 'predictions': {k: v.cpu() for k, v in preds.items()},
+#                 'batch_info': {k: v.cpu() for k, v in batch.items()}
+#             }
+            
+#             # print("Pred keys:", preds.keys())
+            
+#             # # Save predictions and relevant batch data
+#             # for collection_name, collection in [('preds', preds), ('batch', batch)]:
+#             #     for k, v in collection.items():
+#             #         if k in config.eval_save_outputs:
+#             #             if collection_name == 'preds':
+#             #                 batch_data['predictions'][k] = v.cpu()
+#             #             else:
+#             #                 batch_data['batch_info'][k] = v.cpu()
+            
+#             # os.makedirs(config.checkpoint_path.replace('ckpt/', 'results/'), exist_ok=True)
+#             # batch_path = os.path.join(
+#             #     config.checkpoint_path.replace('ckpt/', 'results/'),
+#             #     f"batch_data_{processed_batches:04d}.pt"
+#             # )
+            
+#             # Save batch data to RESULT_DIR (not ckpt/)
+#             batch_path = os.path.join(RESULT_DIR, f"batch_data_{processed_batches:04d}.pt")
+#             torch.save(batch_data, batch_path)
+            
+#             print(f"  Saved batch data to {batch_path}")
+#             print(f"    Loss: {loss.item():.4f}")
+#             print(f"    Metrics: {metrics}")
+#             print(f"    Predictions: {batch_data['predictions']}")
+#             print(f"    Batch info: {batch_data['batch_info']}")
+#             print(f"    Trajectories_L: {stacked_trajectories_L.shape}")
+#             print(f"    Trajectories_H: {stacked_trajectories_H.shape}")
+#             del batch_data, stacked_trajectories_L, stacked_trajectories_H
+#             # exit(0) # TODO: remove
+
+#             # Update evaluators
+#             for evaluator in evaluators:
+#                     evaluator.update_batch(batch, preds)
+#             del carry, loss, preds, batch, all_finish
+
+#             # Aggregate metrics
+#             set_id = set_ids[set_name]
+
+#             if metric_values is None:
+#                 metric_keys = list(
+#                     sorted(metrics.keys())
+#                 )  # Sort keys to guarantee consistent order
+#                 metric_values = torch.zeros(
+#                     (len(set_ids), len(metrics.values())), dtype=torch.float32, device=device
+#                 )
+
+#             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
+#             del metrics
+
+#         # Concatenate saved predictions
+#         save_preds = {k: torch.cat(v, dim=0) for k, v in save_preds.items()}
+
+#         # # Save predictions
+#         # if config.checkpoint_path is not None:
+#         #     os.makedirs(config.checkpoint_path, exist_ok=True)
+            
+#         #     if len(save_preds):
+#         #         torch.save(
+#         #             save_preds, os.path.join(config.checkpoint_path, f"all_preds.pt")
+#         #         )
+#         # del save_preds
+        
+#         # Save concatenated preds into RESULT_DIR
+#         if len(save_preds):
+#             torch.save(save_preds, os.path.join(RESULT_DIR, "all_preds.pt"))
+#         del save_preds
+
+#         # Process metrics
+#         if metric_values is not None:
+#             reduced_metrics = metric_values.cpu().numpy()
+#             reduced_metrics = {
+#                 set_name: {
+#                     metric_name: reduced_metrics[set_id, metric_id]
+#                     for metric_id, metric_name in enumerate(metric_keys)
+#                 }
+#                 for set_id, set_name in enumerate(set_ids)
+#             }
+
+#             # Postprocess metrics
+#             for set_name, m in reduced_metrics.items():
+#                 count = m.pop("count")
+#                 reduced_metrics[set_name] = {k: v / count for k, v in m.items()}
+            
+#             # Print average metrics (especially accuracy)
+#             print("\n" + "="*60)
+#             print("Average Metrics:")
+#             print("="*60)
+#             for set_name, metrics_dict in reduced_metrics.items():
+#                 print(f"\n{set_name}:", flush=True)
+#                 for metric_name, metric_value in metrics_dict.items():
+#                     print(f"  {metric_name}: {metric_value:.4f}", flush=True)
+#             print("="*60)
+#         else:
+#             raise ValueError("No metrics found")
+
+#         # Run evaluators
+#         print(f"\nRunning {len(evaluators)} evaluator(s)...")
+        
+#         for i, evaluator in enumerate(evaluators):
+#             print(f"Running evaluator {i+1}/{len(evaluators)}: {evaluator.__class__.__name__}")
+                
+#             # # Path for saving
+#             # evaluator_save_path = None
+#             # if config.checkpoint_path is not None:
+#             #     evaluator_save_path = os.path.join(
+#             #         config.checkpoint_path,
+#             #         f"evaluator_{evaluator.__class__.__name__}",
+#             #     )
+#             # os.makedirs(evaluator_save_path, exist_ok=True)
+            
+#             # Evaluator output directory under RESULTS (not ckpt/)
+#             evaluator_save_path = os.path.join(
+#                 RESULT_DIR,
+#                 f"evaluator_{evaluator.__class__.__name__}",
+#             )
+#             os.makedirs(evaluator_save_path, exist_ok=True)
+
+#             # Run and log
+#             metrics = evaluator.result(evaluator_save_path, rank=0, world_size=1, group=None)
+#             if metrics is not None:
+#                 if reduced_metrics is None:
+#                     reduced_metrics = {}
+
+#                 reduced_metrics.update(metrics)
+#                 print(f"  Completed {evaluator.__class__.__name__}")
+                
+#         print("All evaluators completed!")
+
+#     return reduced_metrics
+
 def evaluate(
     config: EvalConfig,
     eval_state: EvalState,
@@ -197,7 +439,7 @@ def evaluate(
         sae = SAE(
             d_model=512, depth=16, n_heads=8, n_features=4096,
             topk=64, lambda_sparse=1e-3, n_registers=4,
-            auxk_topk=512, aux_alpha=1.0/32.0,
+            auxk_topk=512, aux_alpha=1.0 / 32.0,
             dead_token_threshold=200_000,
         ).to(device, dtype=torch.bfloat16)
 
@@ -205,15 +447,13 @@ def evaluate(
         sae.load_state_dict(ckpt["sae_state_dict"])
         sae.eval()
 
-
     with torch.inference_mode():
         return_keys = set(config.eval_save_outputs)
-        return_keys.add("preds")  # Always gather predictions for per-example correctness
+        return_keys.add("preds")
         for evaluator in evaluators:
             evaluator.begin_eval()
             return_keys.update(evaluator.required_outputs)
 
-        # Run evaluation
         set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
 
         save_preds = {}
@@ -222,221 +462,162 @@ def evaluate(
 
         carry = None
         processed_batches = 0
-        
+
         for set_name, batch, global_batch_size in eval_loader:
             processed_batches += 1
             print(f"Processing batch {processed_batches}: {set_name}")
-            
-            # ===========================
-            # LIMIT TO FIRST 20 BATCHES
-            # ===========================
+
             if processed_batches > MAX_BATCHES:
                 print(f"Reached max_batches={MAX_BATCHES}, stopping evaluation early.")
                 break
-            
-            # To device
+
             batch = {k: v.to(device) for k, v in batch.items()}
             with device:
                 carry = eval_state.model.initial_carry(batch)  # type: ignore
 
-            # Store trajectories for this batch
             batch_trajectories_L = []
             batch_trajectories_H = []
-            
-            # Forward
+
             inference_steps = 0
             pbar = tqdm.tqdm(desc=f"Inference steps for batch {processed_batches}")
-            while True:
-                # Save z_L at each inference step (BEFORE forward pass)
-                # This captures the reasoning trajectory at each step
-                assert hasattr(carry, 'inner_carry') and (hasattr(carry.inner_carry, 'z_L') and hasattr(carry.inner_carry, 'z_H'))
-                batch_trajectories_L.append(carry.inner_carry.z_L.cpu())
-                batch_trajectories_H.append(carry.inner_carry.z_H.cpu())
-                
-                # ----------------------------------------
-                # SAE ABLATION (intervene BEFORE forward)
-                # ----------------------------------------
-                if config.use_sae_ablation:
-                    z_L_orig = carry.inner_carry.z_L
 
-                    z_L_ablate = ablate_z_L_with_sae(
-                        z_L_orig,
-                        sae,
-                        config.ablate_ids
-                    )
+            z_L_buffer = []
+
+            while True:
+                assert hasattr(carry, "inner_carry")
+                assert hasattr(carry.inner_carry, "z_L")
+                assert hasattr(carry.inner_carry, "z_H")
+
+                z_L_t = carry.inner_carry.z_L
+                z_H_t = carry.inner_carry.z_H
+
+                batch_trajectories_L.append(z_L_t.cpu())
+                batch_trajectories_H.append(z_H_t.cpu())
+
+                z_L_buffer.append(z_L_t)
+
+                if config.use_sae_ablation and len(z_L_buffer) >= 16:
+                    z_L_traj = torch.stack(
+                        z_L_buffer[-16:], dim=0
+                    ).permute(1, 0, 2, 3).to(
+                        device=device, dtype=torch.bfloat16
+                    )  # [B,16,L,D]
+
+                    out = sae(z_L_traj)
+                    z = out["z_n"]                  # [B,16,L,F]
+                    z[..., config.ablate_ids] = 0
+                    z_L_recon = out["x_tgt"]        # [B,16,L,D]
+
+                    z_L_t = z_L_recon[:, -1]
 
                     carry.inner_carry = type(carry.inner_carry)(
-                        z_L=z_L_ablate,
-                        z_H=carry.inner_carry.z_H
+                        z_L=z_L_t,
+                        z_H=z_H_t
                     )
-                
+
                 carry, loss, metrics, preds, all_finish = eval_state.model(
                     carry=carry, batch=batch, return_keys=return_keys
                 )
+
                 inference_steps += 1
                 pbar.update(1)
 
                 if all_finish:
-                    # Save final z_L after last step
-                    assert hasattr(carry, 'inner_carry') and (hasattr(carry.inner_carry, 'z_L') and hasattr(carry.inner_carry, 'z_H'))
                     batch_trajectories_L.append(carry.inner_carry.z_L.cpu())
                     batch_trajectories_H.append(carry.inner_carry.z_H.cpu())
                     break
 
             pbar.close()
             print(f"  Completed inference in {inference_steps} steps")
-            
-            # Save predictions for this batch
+
             for k, v in preds.items():
                 if k not in save_preds:
                     save_preds[k] = []
                 save_preds[k].append(v.cpu())
-            
-            # Save predictions, loss, trajectories, and metrics for this batch immediately
-            # if config.checkpoint_path is not None:
+
             stacked_trajectories_L = torch.stack(batch_trajectories_L, dim=0)
             stacked_trajectories_H = torch.stack(batch_trajectories_H, dim=0)
+
             batch_data = {
-                'batch_index': processed_batches,
-                'loss': loss.cpu(),
-                'trajectories_L': stacked_trajectories_L.cpu(),
-                'trajectories_H': stacked_trajectories_H.cpu(),
-                'metrics': {k: v.cpu() for k, v in metrics.items()},
-                'predictions': {k: v.cpu() for k, v in preds.items()},
-                'batch_info': {k: v.cpu() for k, v in batch.items()}
+                "batch_index": processed_batches,
+                "loss": loss.cpu(),
+                "trajectories_L": stacked_trajectories_L.cpu(),
+                "trajectories_H": stacked_trajectories_H.cpu(),
+                "metrics": {k: v.cpu() for k, v in metrics.items()},
+                "predictions": {k: v.cpu() for k, v in preds.items()},
+                "batch_info": {k: v.cpu() for k, v in batch.items()},
             }
-            
-            # print("Pred keys:", preds.keys())
-            
-            # # Save predictions and relevant batch data
-            # for collection_name, collection in [('preds', preds), ('batch', batch)]:
-            #     for k, v in collection.items():
-            #         if k in config.eval_save_outputs:
-            #             if collection_name == 'preds':
-            #                 batch_data['predictions'][k] = v.cpu()
-            #             else:
-            #                 batch_data['batch_info'][k] = v.cpu()
-            
-            # os.makedirs(config.checkpoint_path.replace('ckpt/', 'results/'), exist_ok=True)
-            # batch_path = os.path.join(
-            #     config.checkpoint_path.replace('ckpt/', 'results/'),
-            #     f"batch_data_{processed_batches:04d}.pt"
-            # )
-            
-            # Save batch data to RESULT_DIR (not ckpt/)
+
             batch_path = os.path.join(RESULT_DIR, f"batch_data_{processed_batches:04d}.pt")
             torch.save(batch_data, batch_path)
-            
+
             print(f"  Saved batch data to {batch_path}")
             print(f"    Loss: {loss.item():.4f}")
             print(f"    Metrics: {metrics}")
-            print(f"    Predictions: {batch_data['predictions']}")
-            print(f"    Batch info: {batch_data['batch_info']}")
             print(f"    Trajectories_L: {stacked_trajectories_L.shape}")
             print(f"    Trajectories_H: {stacked_trajectories_H.shape}")
-            del batch_data, stacked_trajectories_L, stacked_trajectories_H
-            # exit(0) # TODO: remove
 
-            # Update evaluators
+            del batch_data, stacked_trajectories_L, stacked_trajectories_H
+
             for evaluator in evaluators:
-                    evaluator.update_batch(batch, preds)
+                evaluator.update_batch(batch, preds)
+
             del carry, loss, preds, batch, all_finish
 
-            # Aggregate metrics
             set_id = set_ids[set_name]
-
             if metric_values is None:
-                metric_keys = list(
-                    sorted(metrics.keys())
-                )  # Sort keys to guarantee consistent order
+                metric_keys = sorted(metrics.keys())
                 metric_values = torch.zeros(
-                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device=device
+                    (len(set_ids), len(metric_keys)), dtype=torch.float32, device=device
                 )
 
             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
             del metrics
 
-        # Concatenate saved predictions
         save_preds = {k: torch.cat(v, dim=0) for k, v in save_preds.items()}
-
-        # # Save predictions
-        # if config.checkpoint_path is not None:
-        #     os.makedirs(config.checkpoint_path, exist_ok=True)
-            
-        #     if len(save_preds):
-        #         torch.save(
-        #             save_preds, os.path.join(config.checkpoint_path, f"all_preds.pt")
-        #         )
-        # del save_preds
-        
-        # Save concatenated preds into RESULT_DIR
         if len(save_preds):
             torch.save(save_preds, os.path.join(RESULT_DIR, "all_preds.pt"))
         del save_preds
 
-        # Process metrics
         if metric_values is not None:
             reduced_metrics = metric_values.cpu().numpy()
             reduced_metrics = {
                 set_name: {
-                    metric_name: reduced_metrics[set_id, metric_id]
-                    for metric_id, metric_name in enumerate(metric_keys)
+                    metric_name: reduced_metrics[set_id, i]
+                    for i, metric_name in enumerate(metric_keys)
                 }
                 for set_id, set_name in enumerate(set_ids)
             }
 
-            # Postprocess metrics
             for set_name, m in reduced_metrics.items():
                 count = m.pop("count")
                 reduced_metrics[set_name] = {k: v / count for k, v in m.items()}
-            
-            # Print average metrics (especially accuracy)
-            print("\n" + "="*60)
+
+            print("\n" + "=" * 60)
             print("Average Metrics:")
-            print("="*60)
+            print("=" * 60)
             for set_name, metrics_dict in reduced_metrics.items():
-                print(f"\n{set_name}:", flush=True)
+                print(f"\n{set_name}:")
                 for metric_name, metric_value in metrics_dict.items():
-                    print(f"  {metric_name}: {metric_value:.4f}", flush=True)
-            print("="*60)
+                    print(f"  {metric_name}: {metric_value:.4f}")
+            print("=" * 60)
         else:
             raise ValueError("No metrics found")
 
-        # Run evaluators
         print(f"\nRunning {len(evaluators)} evaluator(s)...")
-        
         for i, evaluator in enumerate(evaluators):
             print(f"Running evaluator {i+1}/{len(evaluators)}: {evaluator.__class__.__name__}")
-                
-            # # Path for saving
-            # evaluator_save_path = None
-            # if config.checkpoint_path is not None:
-            #     evaluator_save_path = os.path.join(
-            #         config.checkpoint_path,
-            #         f"evaluator_{evaluator.__class__.__name__}",
-            #     )
-            # os.makedirs(evaluator_save_path, exist_ok=True)
-            
-            # Evaluator output directory under RESULTS (not ckpt/)
             evaluator_save_path = os.path.join(
-                RESULT_DIR,
-                f"evaluator_{evaluator.__class__.__name__}",
+                RESULT_DIR, f"evaluator_{evaluator.__class__.__name__}"
             )
             os.makedirs(evaluator_save_path, exist_ok=True)
-
-            # Run and log
             metrics = evaluator.result(evaluator_save_path, rank=0, world_size=1, group=None)
             if metrics is not None:
-                if reduced_metrics is None:
-                    reduced_metrics = {}
-
                 reduced_metrics.update(metrics)
-                print(f"  Completed {evaluator.__class__.__name__}")
-                
+
         print("All evaluators completed!")
 
     return reduced_metrics
-
 
 def save_code_and_config(config: EvalConfig):
     """Save code and configuration files"""
