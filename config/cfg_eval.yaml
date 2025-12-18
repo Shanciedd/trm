@@ -26,3 +26,6 @@ num_epochs: 10
 
 max_batches: null  # Set to null to use all batches
 
+# ===== SAE Ablation Settings =====
+use_sae_ablation: false
+ablate_ids: []

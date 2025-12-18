@@ -63,6 +63,9 @@ class EvalConfig(pydantic.BaseModel):
     
     # Limit number of eval batches (for debugging)
     max_batches: Optional[int] = None
+    
+    use_sae_ablation: bool = False
+    ablate_ids: List[int] = []
 
 @dataclass
 class EvalState:
@@ -165,6 +168,15 @@ def create_evaluators(config: EvalConfig, eval_metadata: PuzzleDatasetMetadata) 
 
     return evaluators
 
+@torch.no_grad()
+def ablate_z_L_with_sae(z_L, sae, ablate_ids):
+    # z_L: [B, L, D]
+    # SAE expects [B, T, L, D], so fake T=1
+    out = sae(z_L.unsqueeze(1))
+    z = out["z_n"]                  # [B,1,L,F]
+    z[..., ablate_ids] = 0
+    z_L_hat = out["x_tgt"]           # [B,1,L,D]
+    return z_L_hat.squeeze(1)        # [B,L,D]
 
 def evaluate(
     config: EvalConfig,
@@ -178,6 +190,21 @@ def evaluate(
     RESULT_DIR = config.checkpoint_path.replace("ckpt/", "results/")
     os.makedirs(RESULT_DIR, exist_ok=True)
     reduced_metrics = None
+    
+    sae = None
+    if config.use_sae_ablation:
+        from sae import SAE
+        sae = SAE(
+            d_model=512, depth=16, n_heads=8, n_features=4096,
+            topk=64, lambda_sparse=1e-3, n_registers=4,
+            auxk_topk=512, aux_alpha=1.0/32.0,
+            dead_token_threshold=200_000,
+        ).to(device, dtype=torch.bfloat16)
+
+        ckpt = torch.load("weights/sae/best_val.pt", map_location=device)
+        sae.load_state_dict(ckpt["sae_state_dict"])
+        sae.eval()
+
 
     with torch.inference_mode():
         return_keys = set(config.eval_save_outputs)
@@ -225,6 +252,23 @@ def evaluate(
                 assert hasattr(carry, 'inner_carry') and (hasattr(carry.inner_carry, 'z_L') and hasattr(carry.inner_carry, 'z_H'))
                 batch_trajectories_L.append(carry.inner_carry.z_L.cpu())
                 batch_trajectories_H.append(carry.inner_carry.z_H.cpu())
+                
+                # ----------------------------------------
+                # SAE ABLATION (intervene BEFORE forward)
+                # ----------------------------------------
+                if config.use_sae_ablation:
+                    z_L_orig = carry.inner_carry.z_L
+
+                    z_L_ablate = ablate_z_L_with_sae(
+                        z_L_orig,
+                        sae,
+                        config.ablate_ids
+                    )
+
+                    carry.inner_carry = type(carry.inner_carry)(
+                        z_L=z_L_ablate,
+                        z_H=carry.inner_carry.z_H
+                    )
                 
                 carry, loss, metrics, preds, all_finish = eval_state.model(
                     carry=carry, batch=batch, return_keys=return_keys
