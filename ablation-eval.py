@@ -181,6 +181,7 @@ def evaluate(
 
     with torch.inference_mode():
         return_keys = set(config.eval_save_outputs)
+        return_keys.add("preds")  # Always gather predictions for per-example correctness
         for evaluator in evaluators:
             evaluator.begin_eval()
             return_keys.update(evaluator.required_outputs)
